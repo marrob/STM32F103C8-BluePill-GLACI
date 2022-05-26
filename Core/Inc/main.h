@@ -95,6 +95,9 @@ void Error_Handler(void);
 #define LIVE_LED_GPIO_Port GPIOC
 #define TIMEBASE_Pin GPIO_PIN_12
 #define TIMEBASE_GPIO_Port GPIOB
+#define SIN_Pin GPIO_PIN_15
+#define SIN_GPIO_Port GPIOA
+#define SIN_EXTI_IRQn EXTI15_10_IRQn
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */

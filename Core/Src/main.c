@@ -31,26 +31,9 @@
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
-/*** FreqMeter ***/
-typedef struct _FreqConfig_t
+#define MANCHASTER_BITS 48
+typedef struct _Device_t
 {
-  uint16_t TimebasePrescaler;
-  uint16_t TimebaseAutoReload;
-  uint16_t Multiplier;
-}FreqConfig_t;
-
-
-typedef struct _FerqMeter_t
-{
-  uint32_t Counter;
-  uint8_t CfgIndex;
-  uint8_t OutOfRange;
-
-}FreqMeter_t;
-
-typedef struct _Devic_t
-{
-  FreqMeter_t Freq;
 
   struct _Diag
   {
@@ -63,26 +46,17 @@ typedef struct _Devic_t
     uint32_t UpTimeSec;
   }Diag;
 
+
+  uint32_t Interrupts;
+  uint32_t CaptureIndex;
+  uint32_t CapturedTimes[MANCHASTER_BITS];
+
 }Device_t;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
-/*** FreqMeter ***/
-#define FRMETER_TIM_TIMEBASE  TIM2
-#define FRMETER_TIM_COUNTER   TIM1
-
-#define FREQ_CFG_1S      0
-#define FREQ_CFG_100MS   1
-#define FREQ_CFG_10MS    2
-#define FREQ_CFG_1MS     3
-
-#define FreqMeterTimebaseStart()   __HAL_TIM_ENABLE(&htim2)
-#define FreqMeterCoutnerStart()    __HAL_TIM_ENABLE(&htim1)
-#define FreqMeterCounterValue      FRMETER_TIM_COUNTER->CNT
-#define FreqMeterTimebaseValue     FRMETER_TIM_TIMEBASE->CNT
 
 /*** UART ***/
 #define UART_BUFFER_SIZE        40
@@ -98,7 +72,6 @@ typedef struct _Devic_t
  I2C_HandleTypeDef hi2c2;
 
 TIM_HandleTypeDef htim1;
-TIM_HandleTypeDef htim2;
 
 UART_HandleTypeDef huart1;
 DMA_HandleTypeDef hdma_usart1_rx;
@@ -117,7 +90,6 @@ char UartTxBuffer[UART_BUFFER_SIZE];
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_TIM1_Init(void);
-static void MX_TIM2_Init(void);
 static void MX_USART1_UART_Init(void);
 static void MX_DMA_Init(void);
 static void MX_I2C2_Init(void);
@@ -137,21 +109,28 @@ uint8_t DisplayI2CWrite(uint8_t* wdata, size_t wlength);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  Device.Interrupts ++;
+  uint8_t status = HAL_GPIO_ReadPin(SIN_GPIO_Port, SIN_Pin );
+  HAL_GPIO_WritePin(TIMEBASE_GPIO_Port,TIMEBASE_Pin, status);
+}
 
+void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
+{
+
+  if(Device.CaptureIndex < MANCHASTER_BITS)
+  {
+     Device.CapturedTimes[Device.CaptureIndex] = HAL_TIM_ReadCapturedValue( htim, TIM_CHANNEL_1);
+     Device.CaptureIndex ++;
+
+  }
+
+}
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
-   if(htim->Instance == FRMETER_TIM_TIMEBASE)
-   {
-     Device.Freq.Counter = FreqMeterCounterValue;
-     FreqMeterCounterValue = 0;
-     Device.Freq.OutOfRange = 0;
-     HAL_GPIO_TogglePin(TIMEBASE_GPIO_Port, TIMEBASE_Pin);
-   }
-   else if(htim->Instance == FRMETER_TIM_COUNTER)
-   {
-     Device.Freq.OutOfRange = 1;
-   }
+
 }
 
 /* UART ----------------------------------------------------------------------*/
@@ -206,10 +185,6 @@ void UartTask(void)
     else if(!strcmp(cmd,"UPTIME?"))
     {
       sprintf(UartTxBuffer, "%ld", Device.Diag.UpTimeSec);
-    }
-    else if(!strcmp(cmd,"FRQ?"))
-    {
-      sprintf(UartTxBuffer, "%ld", Device.Freq.Counter);
     }
     else
     {
@@ -287,7 +262,6 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_TIM1_Init();
-  MX_TIM2_Init();
   MX_USART1_UART_Init();
   MX_DMA_Init();
   MX_I2C2_Init();
@@ -469,7 +443,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 65535;
+  htim1.Init.Period = 43632;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
@@ -494,7 +468,7 @@ static void MX_TIM1_Init(void)
   }
   sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_RISING;
   sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
-  sConfigIC.ICPrescaler = TIM_ICPSC_DIV2;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
   sConfigIC.ICFilter = 0;
   if (HAL_TIM_IC_ConfigChannel(&htim1, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
   {
@@ -502,52 +476,12 @@ static void MX_TIM1_Init(void)
   }
   /* USER CODE BEGIN TIM1_Init 2 */
 
+  if(HAL_TIM_IC_Start_IT(&htim1, TIM_CHANNEL_1) != HAL_OK)
+  {
+    printf("Capture CH1 Interrupt Error\r\n");
+  }
+
   /* USER CODE END TIM1_Init 2 */
-
-}
-
-/**
-  * @brief TIM2 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM2_Init(void)
-{
-
-  /* USER CODE BEGIN TIM2_Init 0 */
-
-  /* USER CODE END TIM2_Init 0 */
-
-  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
-  TIM_MasterConfigTypeDef sMasterConfig = {0};
-
-  /* USER CODE BEGIN TIM2_Init 1 */
-
-  /* USER CODE END TIM2_Init 1 */
-  htim2.Instance = TIM2;
-  htim2.Init.Prescaler = 0;
-  htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim2.Init.Period = 53400;
-  htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
-  if (HAL_TIM_ConfigClockSource(&htim2, &sClockSourceConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
-  if (HAL_TIMEx_MasterConfigSynchronization(&htim2, &sMasterConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM2_Init 2 */
-
-  /* USER CODE END TIM2_Init 2 */
 
 }
 
@@ -635,6 +569,16 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(TIMEBASE_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : SIN_Pin */
+  GPIO_InitStruct.Pin = SIN_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(SIN_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
+
 }
 
 /* USER CODE BEGIN 4 */
@@ -670,10 +614,7 @@ uint8_t DisplayI2CWrite(uint8_t* wdata, size_t wlength){
 
 
 /* TIMER-- -------------------------------------------------------------------*/
-void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
-{
 
-}
 /* USER CODE END 4 */
 
 /**
