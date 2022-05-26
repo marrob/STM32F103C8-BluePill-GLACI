@@ -308,6 +308,7 @@ int main(void)
   SSD1306_DrawLine(0, 2, 127, 2, SSD1306_WHITE);
   SSD1306_DrawLine(3, 3, 4, 4, SSD1306_WHITE);
 
+
   SSD1306_SetCursor(0, 4);
   SSD1306_DrawString("Hello World", &GfxFont7x8, SSD1306_WHITE );
   SSD1306_DisplayUpdate();
@@ -351,6 +352,8 @@ int main(void)
     {
       timestamp = HAL_GetTick();
       SSD1306_SetCursor(0, 1);
+      memset(string, 0x00, sizeof(string));
+      sprintf(string, "Live:%04ld", Device.Diag.UpTimeSec);
 
       SSD1306_DisplayClear();
       SSD1306_DrawString(string, &GfxFont7x8, SSD1306_WHITE );
