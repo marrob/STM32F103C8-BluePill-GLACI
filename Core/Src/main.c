@@ -26,12 +26,13 @@
 #include "SSD1306_128x32_I2C.h"
 #include <stdio.h>
 #include "string.h"
+#include "Common.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
 
-#define MANCHASTER_BITS 48
+#define MAX_EDGES 1024
 typedef struct _Device_t
 {
 
@@ -47,10 +48,11 @@ typedef struct _Device_t
   }Diag;
 
 
-  uint32_t Interrupts;
-  uint32_t CaptureIndex;
-  uint32_t CapturedTimes[MANCHASTER_BITS];
-
+  struct _Man{
+    uint8_t  Raw[MAX_EDGES/8];
+    uint16_t EdgeIndex;
+    uint16_t Times[256];
+  }Man;
 }Device_t;
 
 /* USER CODE END PTD */
@@ -60,6 +62,23 @@ typedef struct _Device_t
 
 /*** UART ***/
 #define UART_BUFFER_SIZE        40
+
+
+/*** MANCHESTER DECODER ***/
+#define MANCHESTER_BIT_TIME     4616
+
+
+#define REALTIME_1_BIT    4616
+#define REALTIME_1_5_BIT  1.5 * REALTIME_1_BIT
+#define REALTIME_2_BIT    2 * REALTIME_1_BIT
+#define BIT_4_5           3 * REALTIME_1_BIT
+
+#define LESS              0
+#define ONE_BIT           1
+#define ONE_AND_HALF_BIT  2
+#define TWO_BITS          3
+#define INITIAL           4
+
 
 /* USER CODE END PD */
 
@@ -104,29 +123,92 @@ void LiveLedOn(void);
 uint8_t DisplayI2CWrite(uint8_t* wdata, size_t wlength);
 
 
+
+void ArrayToolsU8SetBit(const uint16_t index, void* array);
+
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 
-void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
-{
-  Device.Interrupts ++;
-  uint8_t status = HAL_GPIO_ReadPin(SIN_GPIO_Port, SIN_Pin );
-  HAL_GPIO_WritePin(TIMEBASE_GPIO_Port,TIMEBASE_Pin, status);
-}
+
+
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef *htim)
 {
-
-  if(Device.CaptureIndex < MANCHASTER_BITS)
+/*
+  if(Device.Man.EdgeIndex < 256)
   {
-     Device.CapturedTimes[Device.CaptureIndex] = HAL_TIM_ReadCapturedValue( htim, TIM_CHANNEL_1);
-     Device.CaptureIndex ++;
+    Device.Man.Times[Device.Man.EdgeIndex] = HAL_TIM_ReadCapturedValue( htim, TIM_CHANNEL_1);
+
+    DelayUs(2);
+    if(HAL_GPIO_ReadPin(IN_GPIO_Port, IN_Pin) == GPIO_PIN_SET)
+    {
+      //ArrayToolsU8SetBit(Device.Man.EdgeIndex, Device.Man.Raw);
+      HAL_GPIO_WritePin(OUT_GPIO_Port, OUT_Pin, GPIO_PIN_SET);
+    }
+    else
+    {
+      HAL_GPIO_WritePin(OUT_GPIO_Port, OUT_Pin, GPIO_PIN_RESET);
+    }
+    Device.Man.EdgeIndex ++;
+
 
   }
 
+
+  __HAL_TIM_SetCounter(htim, 0);
+*/
 }
+
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+  if(Device.Man.EdgeIndex < MAX_EDGES)
+  {
+    if(HAL_GPIO_ReadPin(IN_GPIO_Port, IN_Pin) == GPIO_PIN_SET)
+    {
+      HAL_GPIO_WritePin(OUT_GPIO_Port, OUT_Pin, GPIO_PIN_SET);
+      //ArrayToolsU8SetBit(Device.Man.EdgeIndex, Device.Man.Raw);
+      uint8_t byteIdx = Device.Man.EdgeIndex / 8;
+      uint8_t bitIdx = Device.Man.EdgeIndex % 8;
+      Device.Man.Raw[byteIdx] |= (1<<bitIdx);
+    }
+    else
+    {
+      HAL_GPIO_WritePin(OUT_GPIO_Port, OUT_Pin, GPIO_PIN_RESET);
+    }
+    Device.Man.EdgeIndex ++;
+  }
+}
+
+
+
+void ArrayToolsU8SetBit(const uint16_t index, void* array)
+{
+  uint8_t *ptr = array;
+  uint16_t bitIndex;
+  uint8_t  mask;
+  uint8_t  byteIndex;
+
+  mask = 0x80;
+  byteIndex = 0x00;
+  bitIndex = 1;
+
+  byteIndex = index/8;
+  if(index % 8)
+  {
+     bitIndex = index - (byteIndex*8);
+     mask = 1;
+     mask <<= bitIndex;
+  }
+  else
+     mask = 0x01;
+
+  ptr[byteIndex]|= mask;
+}
+
+
 
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
@@ -308,6 +390,8 @@ int main(void)
   hLiveLed.HalfPeriodTimeMs = 500;
   LiveLedInit(&hLiveLed);
 
+  memset(Device.Man.Raw, 0x00, MAX_EDGES/8);
+
   /*** "Kelj fel és járj" ***/
   HAL_UART_Receive_DMA (&huart1, (uint8_t*)UartRxBuffer, UART_BUFFER_SIZE);
 
@@ -443,7 +527,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 0;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 43632;
+  htim1.Init.Period = 0xFFFF;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
@@ -461,7 +545,7 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
-  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_ENABLE;
   if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
   {
     Error_Handler();
@@ -475,6 +559,15 @@ static void MX_TIM1_Init(void)
     Error_Handler();
   }
   /* USER CODE BEGIN TIM1_Init 2 */
+
+  sConfigIC.ICPolarity = TIM_INPUTCHANNELPOLARITY_BOTHEDGE;
+  sConfigIC.ICSelection = TIM_ICSELECTION_DIRECTTI;
+  sConfigIC.ICPrescaler = TIM_ICPSC_DIV1;
+  sConfigIC.ICFilter = 0;
+  if (HAL_TIM_IC_ConfigChannel(&htim1, &sConfigIC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
 
   if(HAL_TIM_IC_Start_IT(&htim1, TIM_CHANNEL_1) != HAL_OK)
   {
@@ -553,7 +646,7 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(LIVE_LED_GPIO_Port, LIVE_LED_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(TIMEBASE_GPIO_Port, TIMEBASE_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(OUT_GPIO_Port, OUT_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : LIVE_LED_Pin */
   GPIO_InitStruct.Pin = LIVE_LED_Pin;
@@ -562,18 +655,18 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(LIVE_LED_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : TIMEBASE_Pin */
-  GPIO_InitStruct.Pin = TIMEBASE_Pin;
+  /*Configure GPIO pin : OUT_Pin */
+  GPIO_InitStruct.Pin = OUT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(TIMEBASE_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(OUT_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : SIN_Pin */
-  GPIO_InitStruct.Pin = SIN_Pin;
+  /*Configure GPIO pin : PA15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  HAL_GPIO_Init(SIN_GPIO_Port, &GPIO_InitStruct);
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
   /* EXTI interrupt init*/
   HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
